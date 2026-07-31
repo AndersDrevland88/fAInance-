@@ -913,11 +913,12 @@ with tab_edit:
             preview_avg = round(total_ub / korr_shares, 4) if korr_shares > 0 else 0.0
             ka3.metric("Ny snittkurs", fmt_nok(preview_avg, 2),
                        delta=f"{'+' if preview_avg >= h['avg_cost'] else ''}{_nor(preview_avg - h['avg_cost'], 2)} kr")
-            st.caption("Bokverdi (UB) holdes fast — snittkurs = UB ÷ antall aksjer.")
+            st.caption("Bokverdi (UB) holdes fast — snittkurs = UB ÷ antall aksjer. Nåkurs synkroniseres automatisk.")
             if st.button("Oppdater antall + snittkurs", key=f"kshbtn_{i}"):
                 if korr_shares > 0:
-                    st.session_state.holdings[i]["shares"]   = korr_shares
-                    st.session_state.holdings[i]["avg_cost"] = preview_avg
+                    st.session_state.holdings[i]["shares"]       = korr_shares
+                    st.session_state.holdings[i]["avg_cost"]     = preview_avg
+                    st.session_state.holdings[i]["manual_price"] = preview_avg
                 else:
                     st.session_state.holdings[i]["shares"] = 0.0
                 save_data(st.session_state.holdings)
@@ -929,15 +930,24 @@ with tab_edit:
             # ── Oppdater kurs / verdivurdering ───────────────────────────────
             st.markdown("#### 💰 Oppdater kurs")
             if h["type"] == "unlisted":
-                st.caption("Oppdater markedskurs etter emisjon, ny investeringsrunde eller ekstern verdivurdering.")
-                kk1, kk2, kk3 = st.columns(3)
-                cur_mp   = h.get("manual_price") or h["avg_cost"]
-                new_mp   = kk1.number_input("Ny kurs per aksje (kr)", value=float(cur_mp),
-                                            min_value=0.0, format="%.4f", key=f"mp_{i}")
-                mp_note  = kk2.text_input("Kilde / notat", placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
-                new_mkt  = new_mp * h["shares"]
-                kk3.metric("Ny markedsverdi", fmt_nok(new_mkt),
-                           delta=fmt_nok(new_mkt - total_ub))
+                st.caption("Skriv inn kurs per aksje. Markedsverdi = kurs × antall aksjer.")
+                cur_mp  = h.get("manual_price") or h["avg_cost"]
+                shares  = h["shares"]
+
+                kk1, kk2 = st.columns(2)
+                new_mp      = kk1.number_input(
+                    f"Kurs per aksje (kr)  ×  {_nor(shares, 0)} aksjer",
+                    value=float(cur_mp), min_value=0.0, format="%.2f", key=f"mp_{i}")
+                mp_note     = kk2.text_input("Kilde / notat", placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
+
+                new_mkt     = new_mp * shares
+                prev_mkt    = cur_mp * shares
+                mk1, mk2, mk3 = st.columns(3)
+                mk1.metric("Pris per aksje", fmt_nok(new_mp, 2))
+                mk2.metric("Ny markedsverdi", fmt_nok(new_mkt))
+                mk3.metric("Endring fra kostpris", fmt_nok(new_mkt - total_ub),
+                           delta=fmt_pct((new_mkt - total_ub) / total_ub * 100) if total_ub else "–")
+
                 if st.button("Oppdater kurs", key=f"mpbtn_{i}"):
                     st.session_state.holdings[i]["manual_price"] = new_mp
                     st.session_state.holdings[i]["last_updated"] = str(date.today())
@@ -947,7 +957,7 @@ with tab_edit:
                             "note": mp_note, "status": "done",
                         })
                     save_data(st.session_state.holdings)
-                    st.success(f"Kurs oppdatert til {fmt_nok(new_mp, 2)}  (markedsverdi {fmt_nok(new_mkt)})")
+                    st.success(f"Kurs oppdatert: {fmt_nok(new_mp, 2)} × {_nor(shares, 0)} aksjer = {fmt_nok(new_mkt)}")
                     st.rerun()
             else:
                 # Børsnotert: vis live-kurs, tillat manuell overstyr når ticker mangler
