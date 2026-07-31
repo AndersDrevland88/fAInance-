@@ -159,6 +159,218 @@ def mos(intrinsic, price):
         return (intrinsic - price) / intrinsic * 100
     return None
 
+def create_excel_export(holdings, prices):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    # ── Styles ────────────────────────────────────────────────────────────────
+    HDR_FILL  = PatternFill("solid", fgColor="1E3A5F")
+    ALT_FILL  = PatternFill("solid", fgColor="EEF2F7")
+    POS_FILL  = PatternFill("solid", fgColor="D4EDDA")
+    NEG_FILL  = PatternFill("solid", fgColor="F8D7DA")
+    TOT_FILL  = PatternFill("solid", fgColor="2C5282")
+    HDR_FONT  = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
+    TOT_FONT  = Font(bold=True, color="FFFFFF", name="Calibri", size=10)
+    BOLD      = Font(bold=True, name="Calibri", size=10)
+    NORM      = Font(name="Calibri", size=10)
+    CENTER    = Alignment(horizontal="center", vertical="center")
+    RIGHT     = Alignment(horizontal="right",  vertical="center")
+    LEFT      = Alignment(horizontal="left",   vertical="center")
+    thin      = Side(style="thin", color="CCCCCC")
+    BORDER    = Border(bottom=thin)
+
+    FMT_KR    = '#,##0.00'
+    FMT_KR0   = '#,##0'
+    FMT_PCT   = '0.00%'
+    FMT_NUM   = '#,##0.0000'
+    FMT_DATE  = 'YYYY-MM-DD'
+
+    def hdr(ws, row, cols):
+        for c, txt in enumerate(cols, 1):
+            cell = ws.cell(row=row, column=c, value=txt)
+            cell.font = HDR_FONT; cell.fill = HDR_FILL
+            cell.alignment = CENTER; cell.border = BORDER
+
+    def autowidth(ws):
+        for col in ws.columns:
+            w = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(w + 3, 35)
+
+    df = compute_portfolio(holdings, prices)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Sheet 1: Posisjoner
+    # ══════════════════════════════════════════════════════════════════════════
+    ws = wb.active
+    ws.title = "Posisjoner"
+    ws.freeze_panes = "A2"
+
+    cols1 = ["Selskap","Type","Sektor","Antall aksjer","Snittkurs (kr)",
+             "Nåkurs (kr)","Markedsverdi (kr)","Kostpris (kr)",
+             "Urealisert gevinst (kr)","Gevinst (%)","Dag %"]
+    hdr(ws, 1, cols1)
+
+    for r, (_, row) in enumerate(df.iterrows(), 2):
+        fill = ALT_FILL if r % 2 == 0 else PatternFill("solid", fgColor="FFFFFF")
+        vals = [row["name"],
+                "Notert" if row["type"]=="listed" else "Unotert",
+                row["sector"],
+                row["shares"],
+                row["avg_cost"],
+                row["price"],
+                row["mkt_val"],
+                row["cost"],
+                row["gain"],
+                row["gain_pct"] / 100,
+                row["day_chg"] / 100 if pd.notna(row["day_chg"]) else None]
+        fmts = [None,None,None, FMT_NUM, FMT_KR, FMT_KR, FMT_KR0, FMT_KR0, FMT_KR0, FMT_PCT, FMT_PCT]
+        for c, (v, f) in enumerate(zip(vals, fmts), 1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.font = NORM; cell.fill = fill; cell.border = BORDER
+            cell.alignment = RIGHT if isinstance(v, (int, float)) else LEFT
+            if f: cell.number_format = f
+        # Color gain cells
+        gfill = POS_FILL if row["gain"] >= 0 else NEG_FILL
+        ws.cell(row=r, column=9).fill = gfill
+        ws.cell(row=r, column=10).fill = gfill
+
+    # Total row
+    tr = df.shape[0] + 2
+    ws.cell(row=tr, column=1, value="TOTAL").font = TOT_FONT
+    ws.cell(row=tr, column=1).fill = TOT_FILL
+    for c, (col, fmt) in enumerate([(7,"mkt_val"),(8,"cost"),(9,"gain")], 7):
+        cell = ws.cell(row=tr, column=c, value=df[fmt].sum())
+        cell.font = TOT_FONT; cell.fill = TOT_FILL
+        cell.number_format = FMT_KR0; cell.alignment = RIGHT
+    gp = (df["gain"].sum() / df["cost"].sum() * 100) if df["cost"].sum() else 0
+    cell = ws.cell(row=tr, column=10, value=gp/100)
+    cell.font = TOT_FONT; cell.fill = TOT_FILL
+    cell.number_format = FMT_PCT; cell.alignment = RIGHT
+    autowidth(ws)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Sheet 2: Porteføljeanalyse
+    # ══════════════════════════════════════════════════════════════════════════
+    ws2 = wb.create_sheet("Porteføljeanalyse")
+    ws2.column_dimensions["A"].width = 28
+    ws2.column_dimensions["B"].width = 20
+
+    def section(ws, row, title):
+        c = ws.cell(row=row, column=1, value=title)
+        c.font = Font(bold=True, color="FFFFFF", name="Calibri", size=11)
+        c.fill = HDR_FILL; c.alignment = LEFT
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        return row + 1
+
+    def kv(ws, row, key, val, fmt=None):
+        ws.cell(row=row, column=1, value=key).font = BOLD
+        c = ws.cell(row=row, column=2, value=val)
+        c.font = NORM; c.alignment = RIGHT
+        if fmt: c.number_format = fmt
+        return row + 1
+
+    tot_val  = df["mkt_val"].sum(); tot_cost = df["cost"].sum()
+    tot_gain = tot_val - tot_cost
+    lval     = df[df["type"]=="listed"]["mkt_val"].sum()
+    uval     = df[df["type"]=="unlisted"]["mkt_val"].sum()
+
+    r = section(ws2, 1, "📊 Sammendrag")
+    r = kv(ws2, r, "Dato", str(date.today()))
+    r = kv(ws2, r, "Total markedsverdi (kr)", tot_val, FMT_KR0)
+    r = kv(ws2, r, "Total kostpris (kr)", tot_cost, FMT_KR0)
+    r = kv(ws2, r, "Urealisert gevinst (kr)", tot_gain, FMT_KR0)
+    r = kv(ws2, r, "Urealisert gevinst (%)", tot_gain/tot_cost if tot_cost else 0, FMT_PCT)
+    r = kv(ws2, r, "Antall posisjoner", len(holdings))
+    r += 1
+
+    r = section(ws2, r, "🔵 Notert vs. Unotert")
+    r = kv(ws2, r, "Noterte aksjer (kr)", lval, FMT_KR0)
+    r = kv(ws2, r, "Noterte andel (%)", lval/tot_val if tot_val else 0, FMT_PCT)
+    r = kv(ws2, r, "Unoterte aksjer (kr)", uval, FMT_KR0)
+    r = kv(ws2, r, "Unoterte andel (%)", uval/tot_val if tot_val else 0, FMT_PCT)
+    r += 1
+
+    r = section(ws2, r, "🥧 Sektorfordeling")
+    hdr(ws2, r, ["Sektor","Markedsverdi (kr)","Andel (%)"])
+    ws2.column_dimensions["C"].width = 14
+    r += 1
+    sector_g = df.groupby("sector")["mkt_val"].sum().sort_values(ascending=False)
+    for sec, val in sector_g.items():
+        ws2.cell(row=r, column=1, value=sec).font = NORM
+        c = ws2.cell(row=r, column=2, value=val); c.font=NORM; c.number_format=FMT_KR0; c.alignment=RIGHT
+        c = ws2.cell(row=r, column=3, value=val/tot_val if tot_val else 0); c.font=NORM; c.number_format=FMT_PCT; c.alignment=RIGHT
+        r += 1
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Sheet 3: Selskapsanalyse (listed fundamentals)
+    # ══════════════════════════════════════════════════════════════════════════
+    ws3 = wb.create_sheet("Selskapsanalyse")
+    ws3.freeze_panes = "A2"
+    cols3 = ["Selskap","Ticker","Anbefaling","Kurs (kr)","Analytiker snitt (kr)",
+             "Analytiker høy (kr)","Analytiker lav (kr)","Antall analytikere",
+             "Oppside analytiker (%)","EPS (ttm)","P/E","P/B","Beta",
+             "Gjeld/EK","Bruttomargin (%)","Nettom. (%)","ROE (%)","Utbytte (%)"]
+    hdr(ws3, 1, cols3)
+
+    for r_i, h in enumerate(holdings, 2):
+        if h["type"] != "listed" or not h.get("ticker"):
+            continue
+        f = fetch_fundamentals(h["ticker"])
+        price = get_price(h, prices)
+        tm = f.get("target_mean")
+        vals3 = [h["name"], h["ticker"],
+                 f.get("rec_key",""),
+                 price, tm,
+                 f.get("target_high"), f.get("target_low"),
+                 f.get("num_analysts"),
+                 (tm - price)/price if tm and price else None,
+                 f.get("eps"), f.get("pe"), f.get("pb"),
+                 f.get("beta"), f.get("debt_equity"),
+                 f.get("gross_margin"), f.get("net_margin"), f.get("roe"),
+                 f.get("div_yield")]
+        fmts3 = [None,None,None, FMT_KR,FMT_KR,FMT_KR,FMT_KR, '#,##0',
+                 FMT_PCT, FMT_KR, FMT_KR, FMT_KR,
+                 '0.00','0.00', FMT_PCT,FMT_PCT,FMT_PCT,FMT_PCT]
+        fill3 = ALT_FILL if r_i % 2 == 0 else PatternFill("solid", fgColor="FFFFFF")
+        for c, (v, f_) in enumerate(zip(vals3, fmts3), 1):
+            cell = ws3.cell(row=r_i, column=c, value=v)
+            cell.font=NORM; cell.fill=fill3; cell.border=BORDER
+            cell.alignment = RIGHT if isinstance(v,(int,float)) else LEFT
+            if f_ and v is not None: cell.number_format = f_
+    autowidth(ws3)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Sheet 4: Transaksjoner
+    # ══════════════════════════════════════════════════════════════════════════
+    ws4 = wb.create_sheet("Transaksjoner")
+    ws4.freeze_panes = "A2"
+    hdr(ws4, 1, ["Selskap","Dato","Type","Antall aksjer","Pris per aksje (kr)","Total (kr)","Notat"])
+    r4 = 2
+    for h in sorted(holdings, key=lambda x: x["name"]):
+        for t in sorted(h.get("transactions",[]), key=lambda x: x["date"]):
+            qty   = t["shares"]; pps = t["price_per_share"]
+            fill4 = POS_FILL if t["type"]=="buy" else NEG_FILL
+            vals4 = [h["name"], t["date"],
+                     "Kjøp" if t["type"]=="buy" else "Salg",
+                     qty, pps, qty*pps, t.get("note","")]
+            fmts4 = [None, FMT_DATE, None, FMT_NUM, FMT_KR, FMT_KR0, None]
+            for c, (v, f_) in enumerate(zip(vals4, fmts4), 1):
+                cell = ws4.cell(row=r4, column=c, value=v)
+                cell.font=NORM; cell.fill=fill4 if c==3 else (ALT_FILL if r4%2==0 else PatternFill("solid",fgColor="FFFFFF"))
+                cell.border=BORDER
+                cell.alignment = RIGHT if isinstance(v,(int,float)) else LEFT
+                if f_ and v is not None: cell.number_format = f_
+            r4 += 1
+    autowidth(ws4)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 def get_price(h, prices):
     if h["type"] == "unlisted":
@@ -429,9 +641,9 @@ c4.metric("🔴 Unoterte aksjer",    fmt_nok(unlisted_val), f"{_nor(unlisted_val
 st.markdown("---")
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
-tab_pos, tab_val, tab_ana, tab_trig, tab_risk, tab_sek, tab_hist, tab_edit = st.tabs([
+tab_pos, tab_val, tab_ana, tab_trig, tab_risk, tab_sek, tab_hist, tab_edit, tab_exp = st.tabs([
     "📋 Posisjoner", "💎 Verdivurdering", "📡 Analytikere", "🎯 Triggere",
-    "⚠️ Risiko", "🥧 Sektorfordeling", "📈 Historikk", "✏️ Rediger",
+    "⚠️ Risiko", "🥧 Sektorfordeling", "📈 Historikk", "✏️ Rediger", "📥 Eksport",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1061,3 +1273,56 @@ with tab_edit:
                     st.rerun()
                 else:
                     st.warning("Fyll inn antall aksjer og pris.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 9 – EKSPORT
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_exp:
+    st.subheader("📥 Eksporter portefølje til Excel")
+
+    st.markdown("""
+    Genererer en Excel-fil med fire ark:
+
+    | Ark | Innhold |
+    |---|---|
+    | **Posisjoner** | Alle posisjoner med antall, snittkurs, nåkurs, markedsverdi og gevinst |
+    | **Porteføljeanalyse** | Sammendrag, notert vs. unotert, sektorfordeling |
+    | **Selskapsanalyse** | Fundamentaldata og analytikervurderinger for børsnoterte aksjer |
+    | **Transaksjoner** | Full transaksjonslogg for alle selskaper |
+    """)
+
+    st.info("Selskapsanalyse-arket bruker data som er cachet i denne sesjonen. Trykk **Oppdater kurser** i sidepanelet for å hente ferske tall.")
+
+    filename = f"CALMA_portefolje_{date.today()}.xlsx"
+
+    if st.button("📊 Generer Excel-rapport", type="primary", use_container_width=True):
+        with st.spinner("Bygger Excel-fil..."):
+            excel_bytes = create_excel_export(st.session_state.holdings, prices)
+        st.download_button(
+            label="⬇️ Last ned Excel-fil",
+            data=excel_bytes,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+        )
+        st.success(f"Klar: {filename}")
+
+    st.markdown("---")
+    st.markdown("#### Forhåndsvisning – Posisjoner")
+    prev = df[["name","type","shares","avg_cost","price","mkt_val","cost","gain","gain_pct"]].copy()
+    prev.columns = ["Selskap","Type","Antall","Snittkurs","Nåkurs","Markedsverdi","Kostpris","Gevinst (kr)","Gevinst (%)"]
+    prev["Type"] = prev["Type"].map({"listed":"🔵 Notert","unlisted":"🔴 Unotert"})
+    st.dataframe(
+        prev.style.format({
+            "Antall":        lambda x: _nor(x, 2),
+            "Snittkurs":     lambda x: fmt_nok(x, 2),
+            "Nåkurs":        lambda x: fmt_nok(x, 2),
+            "Markedsverdi":  lambda x: fmt_nok(x),
+            "Kostpris":      lambda x: fmt_nok(x),
+            "Gevinst (kr)":  lambda x: fmt_nok(x),
+            "Gevinst (%)":   lambda x: fmt_pct(x),
+        }).map(color_val, subset=["Gevinst (kr)","Gevinst (%)"]),
+        use_container_width=True, hide_index=True,
+    )
+    st.markdown(f"**Total markedsverdi:** {fmt_nok(total_val)} &nbsp;|&nbsp; **Gevinst:** {fmt_nok(total_gain)} ({fmt_pct(total_gain_p)})")
