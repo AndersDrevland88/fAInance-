@@ -13,6 +13,7 @@ from datetime import datetime, date
 import json
 import os
 import math
+import re
 
 st.set_page_config(
     page_title="CALMA HOLDING – Portefølje",
@@ -33,6 +34,7 @@ def load_data():
             h.setdefault("own_target", None)
             h.setdefault("dcf_params", {})
             h.setdefault("catalysts", [])
+            h.setdefault("transactions", [])
         return data
     return DEFAULT_HOLDINGS
 
@@ -116,6 +118,23 @@ def get_history(tickers: tuple, period: str):
     return pd.concat(dfs) if dfs else pd.DataFrame()
 
 # ─── VALUATION ────────────────────────────────────────────────────────────────
+def recalc_from_transactions(transactions):
+    """Weighted average cost and total shares from transaction log."""
+    shares = 0.0
+    cost_basis = 0.0
+    for t in sorted(transactions, key=lambda x: x["date"]):
+        qty = float(t["shares"])
+        price = float(t["price_per_share"])
+        if t["type"] == "buy":
+            cost_basis += qty * price
+            shares += qty
+        elif t["type"] == "sell":
+            if shares > 0:
+                cost_basis = (cost_basis / shares) * max(0, shares - qty)
+            shares = max(0, shares - qty)
+    avg = (cost_basis / shares) if shares > 0 else 0.0
+    return round(shares, 4), round(avg, 4)
+
 def graham_number(eps, book_value):
     if eps and book_value and eps > 0 and book_value > 0:
         return math.sqrt(22.5 * eps * book_value)
@@ -168,6 +187,82 @@ def color_val(v):
         return "color: #22c55e" if v >= 0 else "color: #ef4444"
     return ""
 
+def parse_nor_number(s):
+    """Parse Norwegian number format: '1.234,56' → 1234.56, handles negatives."""
+    s = str(s).strip().replace("\xa0", "").replace(" ", "")
+    negative = s.startswith("-")
+    s = s.lstrip("-")
+    if "," in s:
+        integer_part = s.split(",")[0].replace(".", "")
+        decimal_part = s.split(",")[1]
+        try:
+            val = float(integer_part + "." + decimal_part)
+        except ValueError:
+            val = 0.0
+    else:
+        try:
+            val = float(s.replace(".", "")) if s else 0.0
+        except ValueError:
+            val = 0.0
+    return -val if negative else val
+
+def parse_saldobalanse_calma(df):
+    """
+    Parse CALMA-style saldobalanse:
+      1300–1399 → unoterte aksjer
+      1850–1899 (UB > 0) → børsnoterte aksjer
+    Extracts share count from Kontonavn where present.
+    avg_cost = Utgående saldo / antall aksjer.
+    """
+    results = []
+    for _, row in df.iterrows():
+        try:
+            konto     = int(str(row.iloc[0]).strip())
+            kontonavn = str(row.iloc[1]).strip()
+            ub        = parse_nor_number(row.iloc[4])  # Utgående saldo
+
+            if ub <= 0:
+                continue
+            if 1300 <= konto <= 1399:
+                stock_type = "unlisted"
+            elif 1850 <= konto <= 1899:
+                stock_type = "listed"
+            else:
+                continue
+
+            # Extract share count from name (e.g. "500 AKSJER", "(100 aksjer", "- 5090 AKSJER")
+            shares = None
+            m = re.search(r'(\d[\d.,]*)\s+aksjer', kontonavn, re.IGNORECASE)
+            if m:
+                shares = parse_nor_number(m.group(1))
+
+            # avg cost = UB / shares; fall back to UB as total cost with shares=1
+            if shares and shares > 0:
+                avg_cost = round(ub / shares, 4)
+            else:
+                shares   = 1.0
+                avg_cost = round(ub, 4)
+
+            # Clean company name: strip share-count parentheticals and suffixes
+            name = kontonavn
+            name = re.sub(r'\s*\([^)]*\d[^)]*\)', '', name)              # (21 AKSJER à...)
+            name = re.sub(r'\s*[-–]\s*\d[\d.,]*\s+aksjer.*', '', name, flags=re.IGNORECASE)  # - 500 AKSJER À 11,33 NOK
+            name = re.sub(r'\s+\d[\d.,]*\s+aksjer.*', '', name, flags=re.IGNORECASE)         # 53 aksjer a 46,52
+            name = name.strip().strip('-–').strip()
+
+            results.append({
+                "konto":    konto,
+                "name":     name,
+                "type":     stock_type,
+                "shares":   shares,
+                "avg_cost": avg_cost,
+                "ub":       ub,
+                "raw_name": kontonavn,
+            })
+        except Exception:
+            continue
+    return results
+
 EMPTY_COLS = ["id","name","ticker","type","sector","shares","avg_cost","manual_price",
               "last_updated","own_target","dcf_params","catalysts",
               "price","cost","mkt_val","gain","gain_pct","day_chg"]
@@ -218,6 +313,67 @@ with st.sidebar:
             save_data(st.session_state.holdings)
             st.success(f"✅ {nn} lagt til!")
             st.rerun()
+
+    st.markdown("### 📂 Importer saldobalanse")
+    with st.expander("Last opp CSV (CALMA-format)"):
+        uploaded = st.file_uploader(
+            "Velg saldobalanse (CSV med semikolon, norsk tallformat)",
+            type=["csv","xlsx","xls"], key="sal_upload",
+        )
+        if uploaded:
+            try:
+                if uploaded.name.lower().endswith(".csv"):
+                    raw_df = pd.read_csv(uploaded, sep=";", dtype=str, encoding="utf-8-sig")
+                else:
+                    raw_df = pd.read_excel(uploaded, dtype=str)
+
+                parsed = parse_saldobalanse_calma(raw_df)
+
+                if not parsed:
+                    st.warning("Fant ingen aksjekontoer (1300–1399 eller 1850–1899 med UB > 0).")
+                else:
+                    prev_df = pd.DataFrame(parsed)[["konto","name","type","shares","avg_cost","ub","raw_name"]]
+                    prev_df.columns = ["Konto","Navn (renset)","Type","Antall","Snittkurs (kr)","UB (kr)","Originalt kontonavn"]
+                    prev_df["Type"] = prev_df["Type"].map({"unlisted":"🔴 Unotert","listed":"🔵 Notert"})
+                    st.dataframe(prev_df, use_container_width=True, hide_index=True)
+                    st.caption(f"{len(parsed)} posisjoner funnet. Allerede eksisterende (samme navn) hoppes over.")
+
+                    existing_names = {h["name"].lower() for h in st.session_state.holdings}
+                    new_count = sum(1 for p in parsed if p["name"].lower() not in existing_names)
+                    st.info(f"{new_count} nye posisjoner vil bli importert ({len(parsed) - new_count} finnes allerede).")
+
+                    if st.button("✅ Importer til portefølje", type="primary", use_container_width=True):
+                        added = 0
+                        for p in parsed:
+                            if p["name"].lower() in existing_names:
+                                continue
+                            st.session_state.holdings.append({
+                                "id":           f"sal_{p['konto']}_{datetime.now().timestamp()}",
+                                "name":         p["name"],
+                                "ticker":       None,
+                                "type":         p["type"],
+                                "sector":       "Annet",
+                                "shares":       p["shares"],
+                                "avg_cost":     p["avg_cost"],
+                                "manual_price": p["avg_cost"],
+                                "last_updated": str(date.today()),
+                                "own_target":   None,
+                                "dcf_params":   {},
+                                "catalysts":    [],
+                                "transactions": [{
+                                    "date":            str(date.today()),
+                                    "type":            "buy",
+                                    "shares":          p["shares"],
+                                    "price_per_share": p["avg_cost"],
+                                    "note":            f"Importert fra saldobalanse (konto {p['konto']})",
+                                }],
+                            })
+                            added += 1
+                        save_data(st.session_state.holdings)
+                        st.success(f"✅ {added} posisjoner importert!")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"Kunne ikke lese fil: {e}")
 
     st.markdown("---")
     st.caption(f"Sist oppdatert: {datetime.now().strftime('%H:%M:%S')}")
@@ -695,25 +851,29 @@ with tab_hist:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_edit:
     st.subheader("Rediger posisjoner")
-    st.caption("Endringer lagres til portfolio_data.json")
+    st.caption("Snittkurs beregnes automatisk fra transaksjonslogg. Endringer lagres til portfolio_data.json.")
 
     for i, h in enumerate(st.session_state.holdings):
-        with st.expander(f"{'🔵' if h['type']=='listed' else '🔴'} {h['name']}"):
+        txns = h.get("transactions", [])
+        label = f"{'🔵' if h['type']=='listed' else '🔴'} {h['name']}  —  {h['shares']:,.0f} aksjer  |  snittkurs {h['avg_cost']:.2f} kr"
+        with st.expander(label):
+
+            # ── Grunnleggende felt ────────────────────────────────────────────
             e1, e2, e3 = st.columns(3)
-            new_shares = e1.number_input("Antall", value=h["shares"], key=f"sh_{i}", min_value=0)
-            new_avg    = e2.number_input("Snittkurs", value=float(h["avg_cost"]), key=f"av_{i}", format="%.2f")
-            new_mp     = e3.number_input("Manuell kurs", value=float(h["manual_price"] or 0), key=f"mp_{i}", format="%.2f") if h["type"] == "unlisted" else None
             new_ticker = e1.text_input("Ticker", value=h.get("ticker") or "", key=f"tk_{i}") if h["type"] == "listed" else None
+            new_mp     = e2.number_input("Nåkurs (manuell, kr)", value=float(h["manual_price"] or h["avg_cost"]), key=f"mp_{i}", format="%.4f") if h["type"] == "unlisted" else None
+            new_sector = e3.selectbox("Sektor", ["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"],
+                                      index=["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"].index(h.get("sector","Annet")) if h.get("sector","Annet") in ["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"] else 0,
+                                      key=f"sec_{i}")
 
             cs, cd = st.columns([3, 1])
-            if cs.button("💾 Lagre", key=f"sv_{i}"):
-                st.session_state.holdings[i]["shares"]   = new_shares
-                st.session_state.holdings[i]["avg_cost"] = new_avg
+            if cs.button("💾 Lagre felt", key=f"sv_{i}"):
                 if h["type"] == "unlisted":
                     st.session_state.holdings[i]["manual_price"] = new_mp
                     st.session_state.holdings[i]["last_updated"] = str(date.today())
-                if h["type"] == "listed" and new_ticker:
-                    st.session_state.holdings[i]["ticker"] = new_ticker
+                if h["type"] == "listed" and new_ticker is not None:
+                    st.session_state.holdings[i]["ticker"] = new_ticker or None
+                st.session_state.holdings[i]["sector"] = new_sector
                 save_data(st.session_state.holdings)
                 st.success("Lagret!")
                 st.rerun()
@@ -721,3 +881,67 @@ with tab_edit:
                 st.session_state.holdings.pop(i)
                 save_data(st.session_state.holdings)
                 st.rerun()
+
+            st.markdown("---")
+
+            # ── Transaksjonslogg ──────────────────────────────────────────────
+            st.markdown("#### 🧾 Transaksjoner")
+            if txns:
+                txn_df = pd.DataFrame(txns).sort_values("date", ascending=False)
+                txn_df["Pris/aksje"] = txn_df["price_per_share"].apply(lambda x: f"{x:.4f} kr")
+                txn_df["Total"]      = (txn_df["shares"] * txn_df["price_per_share"]).apply(lambda x: fmt_nok(x))
+                disp = txn_df[["date","type","shares","Pris/aksje","Total","note"]].copy()
+                disp.columns = ["Dato","Type","Antall","Pris/aksje","Total","Notat"]
+                disp["Type"] = disp["Type"].map({"buy":"🟢 Kjøp","sell":"🔴 Salg"})
+                st.dataframe(disp, use_container_width=True, hide_index=True)
+                # Sletteknapp per rad
+                del_idx = st.selectbox("Slett transaksjon (radnummer)", ["–"] + list(range(len(txns))), key=f"delt_{i}")
+                if del_idx != "–" and st.button("Slett valgt transaksjon", key=f"deltbtn_{i}"):
+                    st.session_state.holdings[i]["transactions"].pop(int(del_idx))
+                    new_s, new_a = recalc_from_transactions(st.session_state.holdings[i]["transactions"])
+                    st.session_state.holdings[i]["shares"]   = new_s
+                    st.session_state.holdings[i]["avg_cost"] = new_a
+                    save_data(st.session_state.holdings)
+                    st.rerun()
+            else:
+                st.info("Ingen transaksjoner registrert ennå.")
+
+            # ── Legg til ny transaksjon ───────────────────────────────────────
+            st.markdown("#### ➕ Legg til transaksjon")
+            t1, t2, t3 = st.columns(3)
+            t_type   = t1.selectbox("Type", ["buy","sell"], format_func=lambda x: "🟢 Kjøp" if x=="buy" else "🔴 Salg", key=f"ttype_{i}")
+            t_date   = t2.date_input("Dato", value=date.today(), key=f"tdate_{i}")
+            t_shares = t3.number_input("Antall aksjer", min_value=0.0, value=0.0, step=1.0, format="%.4f", key=f"tshares_{i}")
+
+            input_mode = st.radio("Angi pris som", ["Pris per aksje (kr)", "Total beløp (kr)"],
+                                  horizontal=True, key=f"tmode_{i}")
+            ta, tb = st.columns(2)
+            if input_mode == "Pris per aksje (kr)":
+                t_price = ta.number_input("Pris per aksje (kr)", min_value=0.0, value=0.0, format="%.4f", key=f"tprice_{i}")
+                t_total = t_shares * t_price
+                tb.metric("Total beløp", fmt_nok(t_total))
+            else:
+                t_total_input = ta.number_input("Total beløp (kr)", min_value=0.0, value=0.0, format="%.2f", key=f"ttotal_{i}")
+                t_price = t_total_input / t_shares if t_shares > 0 else 0.0
+                t_total = t_total_input
+                tb.metric("Pris per aksje", f"{t_price:.4f} kr")
+
+            t_note = st.text_input("Notat (valgfritt)", key=f"tnote_{i}")
+
+            if st.button("Legg til transaksjon", type="primary", key=f"tadd_{i}"):
+                if t_shares > 0 and t_price > 0:
+                    st.session_state.holdings[i].setdefault("transactions", []).append({
+                        "date":            str(t_date),
+                        "type":            t_type,
+                        "shares":          t_shares,
+                        "price_per_share": t_price,
+                        "note":            t_note,
+                    })
+                    new_s, new_a = recalc_from_transactions(st.session_state.holdings[i]["transactions"])
+                    st.session_state.holdings[i]["shares"]   = new_s
+                    st.session_state.holdings[i]["avg_cost"] = new_a
+                    save_data(st.session_state.holdings)
+                    st.success(f"✅ Lagt til: {t_shares:,.4f} aksjer à {t_price:.4f} kr = {fmt_nok(t_total)}")
+                    st.rerun()
+                else:
+                    st.warning("Fyll inn antall aksjer og pris.")
