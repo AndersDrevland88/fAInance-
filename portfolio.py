@@ -274,7 +274,7 @@ with tab_pos:
             "Gevinst (kr)": lambda x: f"{'+'if x>=0 else''}{fmt_nok(x)}",
             "Gevinst (%)":  lambda x: fmt_pct(x),
             "Dag %":        lambda x: fmt_pct(x) if pd.notna(x) else "–",
-        }).applymap(color_val, subset=["Gevinst (kr)","Gevinst (%)","Dag %"]),
+        }).map(color_val, subset=["Gevinst (kr)","Gevinst (%)","Dag %"]),
         use_container_width=True, height=400,
     )
     st.markdown(f"**Total:** {fmt_nok(total_val)} &nbsp;|&nbsp; Gevinst: **{'+'if total_gain>=0 else''}{fmt_nok(total_gain)}** ({fmt_pct(total_gain_p)})")
@@ -442,7 +442,7 @@ with tab_ana:
                 "Antall analytikere": lambda x: str(int(x)) if pd.notna(x) else "–",
                 "Oppside analytiker": lambda x: fmt_pct(x) if pd.notna(x) else "–",
                 "Oppside eget mål":   lambda x: fmt_pct(x) if pd.notna(x) else "–",
-            }).applymap(color_val, subset=["Oppside analytiker", "Oppside eget mål"]),
+            }).map(color_val, subset=["Oppside analytiker", "Oppside eget mål"]),
             use_container_width=True,
         )
 
@@ -579,8 +579,8 @@ with tab_risk:
                 "52u lav":       lambda x: f"{x:.2f} kr" if pd.notna(x) else "–",
                 "Fra topp (%)":  lambda x: fmt_pct(x) if pd.notna(x) else "–",
                 "Fra bunn (%)":  lambda x: fmt_pct(x) if pd.notna(x) else "–",
-            }).applymap(color_beta, subset=["Beta"])
-             .applymap(color_val,  subset=["Fra topp (%)","Fra bunn (%)"]),
+            }).map(color_beta, subset=["Beta"])
+             .map(color_val,  subset=["Fra topp (%)","Fra bunn (%)"]),
             use_container_width=True,
         )
 
