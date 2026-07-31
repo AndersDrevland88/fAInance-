@@ -24,17 +24,7 @@ st.set_page_config(
 # ─── DATA ─────────────────────────────────────────────────────────────────────
 DATA_FILE = "portfolio_data.json"
 
-DEFAULT_HOLDINGS = [
-    {"id": "moreld",  "name": "Moreld",            "ticker": "MORELD.OL", "type": "listed",   "sector": "Industri", "shares": 500,  "avg_cost": 28.5,  "manual_price": None, "last_updated": None, "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "hoegh",   "name": "Höegh Autoliners",  "ticker": "HAUTO.OL",  "type": "listed",   "sector": "Shipping", "shares": 300,  "avg_cost": 92.0,  "manual_price": None, "last_updated": None, "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "archer",  "name": "Archer",             "ticker": "ARCHER.OL", "type": "listed",   "sector": "Energi",   "shares": 1000, "avg_cost": 6.2,   "manual_price": None, "last_updated": None, "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "abg",     "name": "ABG Sundal Collier", "ticker": "ABG.OL",    "type": "listed",   "sector": "Finans",   "shares": 800,  "avg_cost": 7.8,   "manual_price": None, "last_updated": None, "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "sentia",  "name": "Sentia",             "ticker": "SENTIA.OL", "type": "listed",   "sector": "IT",       "shares": 400,  "avg_cost": 14.5,  "manual_price": None, "last_updated": None, "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "grapho",  "name": "Grapho Group",       "ticker": None, "type": "unlisted", "sector": "EdTech",   "shares": 1000, "avg_cost": 8.0,   "manual_price": 10.0, "last_updated": "2025-01-15", "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "saga",    "name": "Saga Mobil AS",       "ticker": None, "type": "unlisted", "sector": "Telekom",  "shares": 500,  "avg_cost": 18.0,  "manual_price": 20.0, "last_updated": "2025-02-01", "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "icbrg",   "name": "ICBRG AS",            "ticker": None, "type": "unlisted", "sector": "Cleantech","shares": 2000, "avg_cost": 5.0,   "manual_price": 6.5,  "last_updated": "2025-01-20", "own_target": None, "dcf_params": {}, "catalysts": []},
-    {"id": "inkasso", "name": "Inkassoregisteret AS","ticker": None, "type": "unlisted", "sector": "Fintech",  "shares": 300,  "avg_cost": 25.0,  "manual_price": 28.0, "last_updated": "2025-02-10", "own_target": None, "dcf_params": {}, "catalysts": []},
-]
+DEFAULT_HOLDINGS = []
 
 def load_data():
     if os.path.exists(DATA_FILE):
