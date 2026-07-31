@@ -168,7 +168,13 @@ def color_val(v):
         return "color: #22c55e" if v >= 0 else "color: #ef4444"
     return ""
 
+EMPTY_COLS = ["id","name","ticker","type","sector","shares","avg_cost","manual_price",
+              "last_updated","own_target","dcf_params","catalysts",
+              "price","cost","mkt_val","gain","gain_pct","day_chg"]
+
 def compute_portfolio(holdings, prices):
+    if not holdings:
+        return pd.DataFrame(columns=EMPTY_COLS)
     rows = []
     for h in holdings:
         price   = get_price(h, prices)
@@ -222,17 +228,21 @@ with st.spinner("Henter kurser fra Oslo Børs..."):
 
 df = compute_portfolio(st.session_state.holdings, prices)
 
-total_val    = df["mkt_val"].sum()
-total_cost   = df["cost"].sum()
+total_val    = df["mkt_val"].sum() if not df.empty else 0.0
+total_cost   = df["cost"].sum()   if not df.empty else 0.0
 total_gain   = total_val - total_cost
 total_gain_p = (total_gain / total_cost * 100) if total_cost else 0
-listed_val   = df[df["type"] == "listed"]["mkt_val"].sum()
-unlisted_val = df[df["type"] == "unlisted"]["mkt_val"].sum()
+listed_val   = df[df["type"] == "listed"]["mkt_val"].sum()   if not df.empty else 0.0
+unlisted_val = df[df["type"] == "unlisted"]["mkt_val"].sum() if not df.empty else 0.0
 
 # ─── HEADER ──────────────────────────────────────────────────────────────────
 st.markdown("# 📊 Porteføljedashboard")
 st.markdown(f"*CALMA HOLDING AS — {datetime.now().strftime('%d.%m.%Y %H:%M')}*")
 st.markdown("---")
+
+if df.empty:
+    st.info("Ingen posisjoner ennå. Legg til aksjer via sidepanelet til venstre.")
+    st.stop()
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("💼 Total verdi",        fmt_nok(total_val),    f"Kostpris {fmt_nok(total_cost)}")
@@ -252,22 +262,24 @@ tab_pos, tab_val, tab_ana, tab_trig, tab_risk, tab_sek, tab_hist, tab_edit = st.
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_pos:
     st.subheader("Alle posisjoner")
-    d = df[["name","type","sector","shares","avg_cost","price","mkt_val","gain","gain_pct","day_chg"]].copy()
-    d.columns = ["Selskap","Type","Sektor","Antall","Snittkurs","Nåkurs","Markedsverdi","Gevinst (kr)","Gevinst (%)","Dag %"]
-    d["Type"] = d["Type"].map({"listed":"🔵 Notert","unlisted":"🔴 Unotert"})
-
-    st.dataframe(
-        d.style.format({
-            "Snittkurs":    "{:.2f} kr",
-            "Nåkurs":       "{:.2f} kr",
-            "Markedsverdi": lambda x: fmt_nok(x),
-            "Gevinst (kr)": lambda x: f"{'+'if x>=0 else''}{fmt_nok(x)}",
-            "Gevinst (%)":  lambda x: fmt_pct(x),
-            "Dag %":        lambda x: fmt_pct(x) if pd.notna(x) else "–",
-        }).map(color_val, subset=["Gevinst (kr)","Gevinst (%)","Dag %"]),
-        use_container_width=True, height=400,
-    )
-    st.markdown(f"**Total:** {fmt_nok(total_val)} &nbsp;|&nbsp; Gevinst: **{'+'if total_gain>=0 else''}{fmt_nok(total_gain)}** ({fmt_pct(total_gain_p)})")
+    if df.empty:
+        st.info("Ingen posisjoner ennå. Legg til aksjer via sidepanelet.")
+    else:
+        d = df[["name","type","sector","shares","avg_cost","price","mkt_val","gain","gain_pct","day_chg"]].copy()
+        d.columns = ["Selskap","Type","Sektor","Antall","Snittkurs","Nåkurs","Markedsverdi","Gevinst (kr)","Gevinst (%)","Dag %"]
+        d["Type"] = d["Type"].map({"listed":"🔵 Notert","unlisted":"🔴 Unotert"})
+        st.dataframe(
+            d.style.format({
+                "Snittkurs":    "{:.2f} kr",
+                "Nåkurs":       "{:.2f} kr",
+                "Markedsverdi": lambda x: fmt_nok(x),
+                "Gevinst (kr)": lambda x: f"{'+'if x>=0 else''}{fmt_nok(x)}",
+                "Gevinst (%)":  lambda x: fmt_pct(x),
+                "Dag %":        lambda x: fmt_pct(x) if pd.notna(x) else "–",
+            }).map(color_val, subset=["Gevinst (kr)","Gevinst (%)","Dag %"]),
+            use_container_width=True, height=400,
+        )
+        st.markdown(f"**Total:** {fmt_nok(total_val)} &nbsp;|&nbsp; Gevinst: **{'+'if total_gain>=0 else''}{fmt_nok(total_gain)}** ({fmt_pct(total_gain_p)})")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 – VERDIVURDERING
