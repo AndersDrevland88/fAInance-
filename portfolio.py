@@ -869,21 +869,20 @@ with tab_edit:
         with st.expander(label):
 
             # ── Grunnleggende felt ────────────────────────────────────────────
+            SECTORS = ["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"]
             e1, e2, e3 = st.columns(3)
             new_ticker = e1.text_input("Ticker", value=h.get("ticker") or "", key=f"tk_{i}") if h["type"] == "listed" else None
-            new_mp     = e2.number_input("Nåkurs (manuell, kr)", value=float(h["manual_price"] or h["avg_cost"]), key=f"mp_{i}", format="%.4f") if h["type"] == "unlisted" else None
-            new_sector = e3.selectbox("Sektor", ["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"],
-                                      index=["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"].index(h.get("sector","Annet")) if h.get("sector","Annet") in ["Industri","Shipping","Energi","Finans","IT","EdTech","Telekom","Cleantech","Fintech","Annet"] else 0,
+            new_name   = e2.text_input("Selskapsnavn", value=h["name"], key=f"nm_{i}")
+            new_sector = e3.selectbox("Sektor", SECTORS,
+                                      index=SECTORS.index(h.get("sector","Annet")) if h.get("sector","Annet") in SECTORS else 0,
                                       key=f"sec_{i}")
 
             cs, cd = st.columns([3, 1])
-            if cs.button("💾 Lagre felt", key=f"sv_{i}"):
-                if h["type"] == "unlisted":
-                    st.session_state.holdings[i]["manual_price"] = new_mp
-                    st.session_state.holdings[i]["last_updated"] = str(date.today())
+            if cs.button("💾 Lagre navn / sektor", key=f"sv_{i}"):
+                st.session_state.holdings[i]["name"]   = new_name
+                st.session_state.holdings[i]["sector"] = new_sector
                 if h["type"] == "listed" and new_ticker is not None:
                     st.session_state.holdings[i]["ticker"] = new_ticker or None
-                st.session_state.holdings[i]["sector"] = new_sector
                 save_data(st.session_state.holdings)
                 st.success("Lagret!")
                 st.rerun()
@@ -891,6 +890,47 @@ with tab_edit:
                 st.session_state.holdings.pop(i)
                 save_data(st.session_state.holdings)
                 st.rerun()
+
+            st.markdown("---")
+
+            # ── Korriger antall aksjer ────────────────────────────────────────
+            st.markdown("#### ✏️ Korriger antall aksjer")
+            st.caption("Bruk dette for å rette importfeil. Snittkurs beholdes uendret.")
+            ka1, ka2 = st.columns(2)
+            korr_shares = ka1.number_input(
+                "Antall aksjer", value=float(h["shares"]), min_value=0.0,
+                step=1.0, format="%.4f", key=f"ksh_{i}")
+            ka2.metric("Nåværende antall", f"{h['shares']:,.4f}")
+            if st.button("Oppdater antall", key=f"kshbtn_{i}"):
+                st.session_state.holdings[i]["shares"] = korr_shares
+                save_data(st.session_state.holdings)
+                st.success(f"Antall oppdatert til {korr_shares:,.4f} aksjer.")
+                st.rerun()
+
+            st.markdown("---")
+
+            # ── Oppdater kurs / verdivurdering ───────────────────────────────
+            st.markdown("#### 💰 Oppdater kurs")
+            if h["type"] == "unlisted":
+                st.caption("Sett ny markedskurs etter emisjon, ny runde eller ekstern verdivurdering.")
+                kk1, kk2, kk3 = st.columns(3)
+                new_mp    = kk1.number_input("Ny kurs per aksje (kr)", value=float(h["manual_price"] or h["avg_cost"]),
+                                             min_value=0.0, format="%.4f", key=f"mp_{i}")
+                new_mp_note = kk2.text_input("Kilde / notat", placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
+                kk3.metric("Forrige kurs", f"{h['manual_price'] or h['avg_cost']:.4f} kr")
+                if st.button("Oppdater kurs", key=f"mpbtn_{i}"):
+                    st.session_state.holdings[i]["manual_price"] = new_mp
+                    st.session_state.holdings[i]["last_updated"] = str(date.today())
+                    if new_mp_note:
+                        st.session_state.holdings[i].setdefault("catalysts", []).append({
+                            "date": str(date.today()), "type": "Kursoppdatering",
+                            "note": new_mp_note, "status": "done",
+                        })
+                    save_data(st.session_state.holdings)
+                    st.success(f"Kurs oppdatert til {new_mp:.4f} kr.")
+                    st.rerun()
+            else:
+                st.caption("For børsnoterte aksjer hentes kurs automatisk fra Yahoo Finance.")
 
             st.markdown("---")
 
