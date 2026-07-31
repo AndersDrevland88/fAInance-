@@ -162,9 +162,11 @@ def mos(intrinsic, price):
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 def get_price(h, prices):
     if h["type"] == "unlisted":
-        return h["manual_price"] or h["avg_cost"]
-    p = prices.get(h["ticker"])
-    return p["price"] if p else h["avg_cost"]
+        return h.get("manual_price") or h["avg_cost"]
+    p = prices.get(h.get("ticker"))
+    if p and p.get("price"):
+        return p["price"]
+    return h.get("manual_price") or h["avg_cost"]
 
 def fmt_nok(v):
     if v is None: return "–"
@@ -895,16 +897,24 @@ with tab_edit:
 
             # ── Korriger antall aksjer ────────────────────────────────────────
             st.markdown("#### ✏️ Korriger antall aksjer")
-            st.caption("Bruk dette for å rette importfeil. Snittkurs beholdes uendret.")
-            ka1, ka2 = st.columns(2)
+            total_ub = round(h["avg_cost"] * h["shares"], 2)
+            ka1, ka2, ka3 = st.columns(3)
             korr_shares = ka1.number_input(
                 "Antall aksjer", value=float(h["shares"]), min_value=0.0,
                 step=1.0, format="%.4f", key=f"ksh_{i}")
-            ka2.metric("Nåværende antall", f"{h['shares']:,.4f}")
-            if st.button("Oppdater antall", key=f"kshbtn_{i}"):
-                st.session_state.holdings[i]["shares"] = korr_shares
+            ka2.metric("Total bokverdi (UB)", fmt_nok(total_ub))
+            preview_avg = round(total_ub / korr_shares, 4) if korr_shares > 0 else 0.0
+            ka3.metric("Ny snittkurs", f"{preview_avg:.4f} kr",
+                       delta=f"{preview_avg - h['avg_cost']:+.4f} kr")
+            st.caption("Bokverdi (UB) holdes fast — snittkurs = UB ÷ antall aksjer.")
+            if st.button("Oppdater antall + snittkurs", key=f"kshbtn_{i}"):
+                if korr_shares > 0:
+                    st.session_state.holdings[i]["shares"]   = korr_shares
+                    st.session_state.holdings[i]["avg_cost"] = preview_avg
+                else:
+                    st.session_state.holdings[i]["shares"] = 0.0
                 save_data(st.session_state.holdings)
-                st.success(f"Antall oppdatert til {korr_shares:,.4f} aksjer.")
+                st.success(f"Oppdatert: {korr_shares:,.4f} aksjer · snittkurs {preview_avg:.4f} kr")
                 st.rerun()
 
             st.markdown("---")
@@ -912,25 +922,58 @@ with tab_edit:
             # ── Oppdater kurs / verdivurdering ───────────────────────────────
             st.markdown("#### 💰 Oppdater kurs")
             if h["type"] == "unlisted":
-                st.caption("Sett ny markedskurs etter emisjon, ny runde eller ekstern verdivurdering.")
+                st.caption("Oppdater markedskurs etter emisjon, ny investeringsrunde eller ekstern verdivurdering.")
                 kk1, kk2, kk3 = st.columns(3)
-                new_mp    = kk1.number_input("Ny kurs per aksje (kr)", value=float(h["manual_price"] or h["avg_cost"]),
-                                             min_value=0.0, format="%.4f", key=f"mp_{i}")
-                new_mp_note = kk2.text_input("Kilde / notat", placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
-                kk3.metric("Forrige kurs", f"{h['manual_price'] or h['avg_cost']:.4f} kr")
+                cur_mp   = h.get("manual_price") or h["avg_cost"]
+                new_mp   = kk1.number_input("Ny kurs per aksje (kr)", value=float(cur_mp),
+                                            min_value=0.0, format="%.4f", key=f"mp_{i}")
+                mp_note  = kk2.text_input("Kilde / notat", placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
+                new_mkt  = new_mp * h["shares"]
+                kk3.metric("Ny markedsverdi", fmt_nok(new_mkt),
+                           delta=fmt_nok(new_mkt - total_ub))
                 if st.button("Oppdater kurs", key=f"mpbtn_{i}"):
                     st.session_state.holdings[i]["manual_price"] = new_mp
                     st.session_state.holdings[i]["last_updated"] = str(date.today())
-                    if new_mp_note:
+                    if mp_note:
                         st.session_state.holdings[i].setdefault("catalysts", []).append({
                             "date": str(date.today()), "type": "Kursoppdatering",
-                            "note": new_mp_note, "status": "done",
+                            "note": mp_note, "status": "done",
                         })
                     save_data(st.session_state.holdings)
-                    st.success(f"Kurs oppdatert til {new_mp:.4f} kr.")
+                    st.success(f"Kurs oppdatert til {new_mp:.4f} kr  (markedsverdi {fmt_nok(new_mkt)})")
                     st.rerun()
             else:
-                st.caption("For børsnoterte aksjer hentes kurs automatisk fra Yahoo Finance.")
+                # Børsnotert: vis live-kurs, tillat manuell overstyr når ticker mangler
+                live = prices.get(h.get("ticker"))
+                live_price = live["price"] if live and live.get("price") else None
+                cur_manual = h.get("manual_price")
+                if live_price:
+                    st.success(f"Live-kurs fra Yahoo Finance: **{live_price:.2f} kr**")
+                    if cur_manual:
+                        st.caption(f"Manuell overstyr aktiv ({cur_manual:.4f} kr) — fjern for å bruke børskurs.")
+                else:
+                    st.warning("Ingen kurs fra Yahoo Finance. Sett manuell kurs nedenfor.")
+                kk1, kk2 = st.columns(2)
+                new_lmp  = kk1.number_input("Manuell kurs per aksje (kr)",
+                                            value=float(cur_manual or live_price or h["avg_cost"]),
+                                            min_value=0.0, format="%.4f", key=f"lmp_{i}")
+                lmp_note = kk2.text_input("Notat", placeholder="f.eks. Hacksaw AB – kurs 2026-07-31", key=f"lmpn_{i}")
+                lc1, lc2 = st.columns(2)
+                if lc1.button("💾 Lagre manuell kurs", key=f"lmpbtn_{i}"):
+                    st.session_state.holdings[i]["manual_price"] = new_lmp
+                    if lmp_note:
+                        st.session_state.holdings[i].setdefault("catalysts", []).append({
+                            "date": str(date.today()), "type": "Kursoppdatering",
+                            "note": lmp_note, "status": "done",
+                        })
+                    save_data(st.session_state.holdings)
+                    st.success(f"Manuell kurs satt til {new_lmp:.4f} kr")
+                    st.rerun()
+                if lc2.button("🔄 Bruk børskurs (fjern manuell)", key=f"lmpclr_{i}"):
+                    st.session_state.holdings[i]["manual_price"] = None
+                    save_data(st.session_state.holdings)
+                    st.success("Manuell kurs fjernet – bruker børskurs.")
+                    st.rerun()
 
             st.markdown("---")
 
