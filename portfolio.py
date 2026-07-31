@@ -168,17 +168,24 @@ def get_price(h, prices):
         return p["price"]
     return h.get("manual_price") or h["avg_cost"]
 
-def fmt_nok(v):
-    if v is None: return "–"
-    return f"{v:,.0f} kr".replace(",", " ")
+def _nor(v, d=0):
+    """Norwegian number format: 1.234.567,50"""
+    s = f"{abs(v):,.{d}f}"  # English: 1,234,567.50
+    s = s.replace(",", "X").replace(".", ",").replace("X", ".")  # → 1.234.567,50
+    return ("-" + s) if v < 0 else s
+
+def fmt_nok(v, d=0):
+    if v is None or (isinstance(v, float) and math.isnan(v)): return "–"
+    return f"{_nor(v, d)} kr"
 
 def fmt_pct(v):
     if v is None or (isinstance(v, float) and math.isnan(v)): return "–"
-    return f"{'+'if v>=0 else''}{v:.1f}%"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{_nor(v, 1)}%"
 
 def fmt_n(v, d=2):
     if v is None or (isinstance(v, float) and math.isnan(v)): return "–"
-    return f"{v:.{d}f}"
+    return _nor(v, d)
 
 def rec_label(key):
     return {"strong_buy": "🟢 Sterkt kjøp", "buy": "🟢 Kjøp",
@@ -415,8 +422,8 @@ if df.empty:
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("💼 Total verdi",        fmt_nok(total_val),    f"Kostpris {fmt_nok(total_cost)}")
 c2.metric("📈 Urealisert gevinst", fmt_nok(total_gain),   fmt_pct(total_gain_p), delta_color="normal")
-c3.metric("🔵 Noterte aksjer",     fmt_nok(listed_val),   f"{listed_val/total_val*100:.1f}% av total" if total_val else "–")
-c4.metric("🔴 Unoterte aksjer",    fmt_nok(unlisted_val), f"{unlisted_val/total_val*100:.1f}% av total" if total_val else "–")
+c3.metric("🔵 Noterte aksjer",     fmt_nok(listed_val),   f"{_nor(listed_val/total_val*100, 1)}% av total" if total_val else "–")
+c4.metric("🔴 Unoterte aksjer",    fmt_nok(unlisted_val), f"{_nor(unlisted_val/total_val*100, 1)}% av total" if total_val else "–")
 st.markdown("---")
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
@@ -438,8 +445,8 @@ with tab_pos:
         d["Type"] = d["Type"].map({"listed":"🔵 Notert","unlisted":"🔴 Unotert"})
         st.dataframe(
             d.style.format({
-                "Snittkurs":    "{:.2f} kr",
-                "Nåkurs":       "{:.2f} kr",
+                "Snittkurs":    lambda x: fmt_nok(x, 2),
+                "Nåkurs":       lambda x: fmt_nok(x, 2),
                 "Markedsverdi": lambda x: fmt_nok(x),
                 "Gevinst (kr)": lambda x: f"{'+'if x>=0 else''}{fmt_nok(x)}",
                 "Gevinst (%)":  lambda x: fmt_pct(x),
@@ -467,7 +474,7 @@ with tab_val:
     with col_left:
         st.markdown("#### Nøkkeltall")
         for label, val in [
-            ("Nåkurs",        f"{sel_price:.2f} kr"),
+            ("Nåkurs",        fmt_nok(sel_price, 2)),
             ("EPS (ttm)",     fmt_n(fund.get("eps"))),
             ("EPS (fwd)",     fmt_n(fund.get("forward_eps"))),
             ("P/E (ttm)",     fmt_n(fund.get("pe"))),
@@ -476,7 +483,7 @@ with tab_val:
             ("Bokverdi/aksje",fmt_n(fund.get("book_value"))),
             ("P/B",           fmt_n(fund.get("pb"))),
             ("FCF",           fmt_nok(fund.get("fcf")) if fund.get("fcf") else "–"),
-            ("Utbytte",       f"{fund['div_yield']*100:.1f}%" if fund.get("div_yield") else "–"),
+            ("Utbytte",       f"{_nor(fund['div_yield']*100, 1)}%" if fund.get("div_yield") else "–"),
         ]:
             st.markdown(f"**{label}:** {val}")
 
@@ -486,7 +493,7 @@ with tab_val:
         if gnum:
             mos_g = mos(gnum, sel_price)
             col = "#22c55e" if (mos_g and mos_g > 0) else "#ef4444"
-            st.markdown(f"**Verdi:** {gnum:.2f} kr")
+            st.markdown(f"**Verdi:** {fmt_nok(gnum, 2)}")
             st.markdown(f"**MoS:** <span style='color:{col};font-weight:bold'>{fmt_pct(mos_g)}</span>", unsafe_allow_html=True)
             if mos_g and mos_g > 20:
                 st.success("✅ God margin of safety (>20%)")
@@ -521,7 +528,7 @@ with tab_val:
             if use_auto:
                 base_fcf   = fcf_auto
                 shares_out = shares_auto
-                st.info(f"FCF: {fmt_nok(fcf_auto)} | Aksjer: {shares_out:,.0f}")
+                st.info(f"FCF: {fmt_nok(fcf_auto)} | Aksjer: {_nor(shares_out, 0)}")
             else:
                 ca, cb = st.columns(2)
                 base_fcf   = ca.number_input("FCF totalt (kr)", value=float(dcf_p.get("base_fcf", fcf_auto)), step=1e6, format="%.0f")
@@ -542,8 +549,8 @@ with tab_val:
             if dval:
                 mos_d = mos(dval, sel_price)
                 m1, m2, m3 = st.columns(3)
-                m1.metric("DCF-verdi", f"{dval:.2f} kr")
-                m2.metric("Nåkurs",    f"{sel_price:.2f} kr")
+                m1.metric("DCF-verdi", fmt_nok(dval, 2))
+                m2.metric("Nåkurs",    fmt_nok(sel_price, 2))
                 m3.metric("Margin of Safety", fmt_pct(mos_d),
                           fmt_pct((dval - sel_price) / sel_price * 100))
 
@@ -555,7 +562,7 @@ with tab_val:
                     x=[g * 100 for g in growths], y=sens_vals,
                     mode="lines+markers", line=dict(color="#3b82f6", width=2)))
                 fig_s.add_hline(y=sel_price, line_dash="dash", line_color="#ef4444",
-                                annotation_text=f"Nåkurs {sel_price:.2f} kr")
+                                annotation_text=f"Nåkurs {_nor(sel_price, 2)} kr")
                 fig_s.update_layout(
                     title="Sensitivitet – vekstrate vs. DCF-verdi",
                     xaxis_title="Vekstrate (%)", yaxis_title="DCF-verdi (kr)",
@@ -604,11 +611,11 @@ with tab_ana:
 
         st.dataframe(
             ana_df.style.format({
-                "Nåkurs":             "{:.2f} kr",
-                "Analytiker snitt":   lambda x: f"{x:.2f} kr" if pd.notna(x) else "–",
-                "Analytiker høy":     lambda x: f"{x:.2f} kr" if pd.notna(x) else "–",
-                "Analytiker lav":     lambda x: f"{x:.2f} kr" if pd.notna(x) else "–",
-                "Mitt kursmål":       lambda x: f"{x:.2f} kr" if pd.notna(x) and x else "–",
+                "Nåkurs":             lambda x: fmt_nok(x, 2),
+                "Analytiker snitt":   lambda x: fmt_nok(x, 2) if pd.notna(x) else "–",
+                "Analytiker høy":     lambda x: fmt_nok(x, 2) if pd.notna(x) else "–",
+                "Analytiker lav":     lambda x: fmt_nok(x, 2) if pd.notna(x) else "–",
+                "Mitt kursmål":       lambda x: fmt_nok(x, 2) if pd.notna(x) and x else "–",
                 "Antall analytikere": lambda x: str(int(x)) if pd.notna(x) else "–",
                 "Oppside analytiker": lambda x: fmt_pct(x) if pd.notna(x) else "–",
                 "Oppside eget mål":   lambda x: fmt_pct(x) if pd.notna(x) else "–",
@@ -742,11 +749,11 @@ with tab_risk:
                 "Beta":          lambda x: fmt_n(x) if pd.notna(x) else "–",
                 "Gjeld/EK":      lambda x: fmt_n(x) if pd.notna(x) else "–",
                 "Current Ratio": lambda x: fmt_n(x) if pd.notna(x) else "–",
-                "ROE":           lambda x: f"{x*100:.1f}%" if pd.notna(x) else "–",
-                "Bruttomargin":  lambda x: f"{x*100:.1f}%" if pd.notna(x) else "–",
-                "Nettom.":       lambda x: f"{x*100:.1f}%" if pd.notna(x) else "–",
-                "52u høy":       lambda x: f"{x:.2f} kr" if pd.notna(x) else "–",
-                "52u lav":       lambda x: f"{x:.2f} kr" if pd.notna(x) else "–",
+                "ROE":           lambda x: f"{_nor(x*100, 1)}%" if pd.notna(x) else "–",
+                "Bruttomargin":  lambda x: f"{_nor(x*100, 1)}%" if pd.notna(x) else "–",
+                "Nettom.":       lambda x: f"{_nor(x*100, 1)}%" if pd.notna(x) else "–",
+                "52u høy":       lambda x: fmt_nok(x, 2) if pd.notna(x) else "–",
+                "52u lav":       lambda x: fmt_nok(x, 2) if pd.notna(x) else "–",
                 "Fra topp (%)":  lambda x: fmt_pct(x) if pd.notna(x) else "–",
                 "Fra bunn (%)":  lambda x: fmt_pct(x) if pd.notna(x) else "–",
             }).map(color_beta, subset=["Beta"])
@@ -867,7 +874,7 @@ with tab_edit:
 
     for i, h in enumerate(st.session_state.holdings):
         txns = h.get("transactions", [])
-        label = f"{'🔵' if h['type']=='listed' else '🔴'} {h['name']}  —  {h['shares']:,.0f} aksjer  |  snittkurs {h['avg_cost']:.2f} kr"
+        label = f"{'🔵' if h['type']=='listed' else '🔴'} {h['name']}  —  {_nor(h['shares'], 0)} aksjer  |  snittkurs {_nor(h['avg_cost'], 2)} kr"
         with st.expander(label):
 
             # ── Grunnleggende felt ────────────────────────────────────────────
@@ -904,8 +911,8 @@ with tab_edit:
                 step=1.0, format="%.4f", key=f"ksh_{i}")
             ka2.metric("Total bokverdi (UB)", fmt_nok(total_ub))
             preview_avg = round(total_ub / korr_shares, 4) if korr_shares > 0 else 0.0
-            ka3.metric("Ny snittkurs", f"{preview_avg:.4f} kr",
-                       delta=f"{preview_avg - h['avg_cost']:+.4f} kr")
+            ka3.metric("Ny snittkurs", fmt_nok(preview_avg, 2),
+                       delta=f"{'+' if preview_avg >= h['avg_cost'] else ''}{_nor(preview_avg - h['avg_cost'], 2)} kr")
             st.caption("Bokverdi (UB) holdes fast — snittkurs = UB ÷ antall aksjer.")
             if st.button("Oppdater antall + snittkurs", key=f"kshbtn_{i}"):
                 if korr_shares > 0:
@@ -914,7 +921,7 @@ with tab_edit:
                 else:
                     st.session_state.holdings[i]["shares"] = 0.0
                 save_data(st.session_state.holdings)
-                st.success(f"Oppdatert: {korr_shares:,.4f} aksjer · snittkurs {preview_avg:.4f} kr")
+                st.success(f"Oppdatert: {_nor(korr_shares, 2)} aksjer · snittkurs {fmt_nok(preview_avg, 2)}")
                 st.rerun()
 
             st.markdown("---")
@@ -940,7 +947,7 @@ with tab_edit:
                             "note": mp_note, "status": "done",
                         })
                     save_data(st.session_state.holdings)
-                    st.success(f"Kurs oppdatert til {new_mp:.4f} kr  (markedsverdi {fmt_nok(new_mkt)})")
+                    st.success(f"Kurs oppdatert til {fmt_nok(new_mp, 2)}  (markedsverdi {fmt_nok(new_mkt)})")
                     st.rerun()
             else:
                 # Børsnotert: vis live-kurs, tillat manuell overstyr når ticker mangler
@@ -948,9 +955,9 @@ with tab_edit:
                 live_price = live["price"] if live and live.get("price") else None
                 cur_manual = h.get("manual_price")
                 if live_price:
-                    st.success(f"Live-kurs fra Yahoo Finance: **{live_price:.2f} kr**")
+                    st.success(f"Live-kurs fra Yahoo Finance: **{fmt_nok(live_price, 2)}**")
                     if cur_manual:
-                        st.caption(f"Manuell overstyr aktiv ({cur_manual:.4f} kr) — fjern for å bruke børskurs.")
+                        st.caption(f"Manuell overstyr aktiv ({fmt_nok(cur_manual, 2)}) — fjern for å bruke børskurs.")
                 else:
                     st.warning("Ingen kurs fra Yahoo Finance. Sett manuell kurs nedenfor.")
                 kk1, kk2 = st.columns(2)
@@ -967,7 +974,7 @@ with tab_edit:
                             "note": lmp_note, "status": "done",
                         })
                     save_data(st.session_state.holdings)
-                    st.success(f"Manuell kurs satt til {new_lmp:.4f} kr")
+                    st.success(f"Manuell kurs satt til {fmt_nok(new_lmp, 2)}")
                     st.rerun()
                 if lc2.button("🔄 Bruk børskurs (fjern manuell)", key=f"lmpclr_{i}"):
                     st.session_state.holdings[i]["manual_price"] = None
@@ -981,7 +988,7 @@ with tab_edit:
             st.markdown("#### 🧾 Transaksjoner")
             if txns:
                 txn_df = pd.DataFrame(txns).sort_values("date", ascending=False)
-                txn_df["Pris/aksje"] = txn_df["price_per_share"].apply(lambda x: f"{x:.4f} kr")
+                txn_df["Pris/aksje"] = txn_df["price_per_share"].apply(lambda x: fmt_nok(x, 2))
                 txn_df["Total"]      = (txn_df["shares"] * txn_df["price_per_share"]).apply(lambda x: fmt_nok(x))
                 disp = txn_df[["date","type","shares","Pris/aksje","Total","note"]].copy()
                 disp.columns = ["Dato","Type","Antall","Pris/aksje","Total","Notat"]
@@ -1017,7 +1024,7 @@ with tab_edit:
                 t_total_input = ta.number_input("Total beløp (kr)", min_value=0.0, value=0.0, format="%.2f", key=f"ttotal_{i}")
                 t_price = t_total_input / t_shares if t_shares > 0 else 0.0
                 t_total = t_total_input
-                tb.metric("Pris per aksje", f"{t_price:.4f} kr")
+                tb.metric("Pris per aksje", fmt_nok(t_price, 2))
 
             t_note = st.text_input("Notat (valgfritt)", key=f"tnote_{i}")
 
@@ -1034,7 +1041,7 @@ with tab_edit:
                     st.session_state.holdings[i]["shares"]   = new_s
                     st.session_state.holdings[i]["avg_cost"] = new_a
                     save_data(st.session_state.holdings)
-                    st.success(f"✅ Lagt til: {t_shares:,.4f} aksjer à {t_price:.4f} kr = {fmt_nok(t_total)}")
+                    st.success(f"✅ Lagt til: {_nor(t_shares, 2)} aksjer à {fmt_nok(t_price, 2)} = {fmt_nok(t_total)}")
                     st.rerun()
                 else:
                     st.warning("Fyll inn antall aksjer og pris.")
