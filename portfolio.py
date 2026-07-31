@@ -14,6 +14,7 @@ import json
 import os
 import math
 import re
+import io
 
 st.set_page_config(
     page_title="CALMA HOLDING – Portefølje",
@@ -323,7 +324,16 @@ with st.sidebar:
         if uploaded:
             try:
                 if uploaded.name.lower().endswith(".csv"):
-                    raw_df = pd.read_csv(uploaded, sep=";", dtype=str, encoding="utf-8-sig")
+                    raw_bytes = uploaded.read()
+                    for enc in ("utf-8-sig", "latin-1", "windows-1252", "utf-8"):
+                        try:
+                            raw_df = pd.read_csv(io.BytesIO(raw_bytes), sep=";", dtype=str, encoding=enc)
+                            break
+                        except (UnicodeDecodeError, Exception):
+                            continue
+                    else:
+                        st.error("Kunne ikke lese CSV-filen – ukjent enkoding.")
+                        st.stop()
                 else:
                     raw_df = pd.read_excel(uploaded, dtype=str)
 
