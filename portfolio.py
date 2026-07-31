@@ -162,11 +162,13 @@ def mos(intrinsic, price):
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 def get_price(h, prices):
     if h["type"] == "unlisted":
-        return h.get("manual_price") or h["avg_cost"]
+        mp = h.get("manual_price")
+        return mp if mp is not None and mp > 0 else h["avg_cost"]
     p = prices.get(h.get("ticker"))
     if p and p.get("price"):
         return p["price"]
-    return h.get("manual_price") or h["avg_cost"]
+    mp = h.get("manual_price")
+    return mp if mp is not None and mp > 0 else h["avg_cost"]
 
 def _nor(v, d=0):
     """Norwegian number format: 1.234.567,50"""
@@ -930,23 +932,27 @@ with tab_edit:
             # ── Oppdater kurs / verdivurdering ───────────────────────────────
             st.markdown("#### 💰 Oppdater kurs")
             if h["type"] == "unlisted":
-                st.caption("Skriv inn kurs per aksje. Markedsverdi = kurs × antall aksjer.")
-                cur_mp  = h.get("manual_price") or h["avg_cost"]
-                shares  = h["shares"]
+                shares   = h["shares"]
+                cur_mp   = h.get("manual_price") or h["avg_cost"]
+                kostpris = round(h["avg_cost"] * shares, 2)
 
                 kk1, kk2 = st.columns(2)
-                new_mp      = kk1.number_input(
-                    f"Kurs per aksje (kr)  ×  {_nor(shares, 0)} aksjer",
+                new_mp   = kk1.number_input(
+                    "Nåkurs per aksje (kr)",
                     value=float(cur_mp), min_value=0.0, format="%.2f", key=f"mp_{i}")
-                mp_note     = kk2.text_input("Kilde / notat", placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
+                mp_note  = kk2.text_input("Kilde / notat",
+                                          placeholder="f.eks. Emisjon Q2 2026", key=f"mpn_{i}")
 
-                new_mkt     = new_mp * shares
-                prev_mkt    = cur_mp * shares
-                mk1, mk2, mk3 = st.columns(3)
-                mk1.metric("Pris per aksje", fmt_nok(new_mp, 2))
-                mk2.metric("Ny markedsverdi", fmt_nok(new_mkt))
-                mk3.metric("Endring fra kostpris", fmt_nok(new_mkt - total_ub),
-                           delta=fmt_pct((new_mkt - total_ub) / total_ub * 100) if total_ub else "–")
+                new_mkt = new_mp * shares
+                st.markdown(
+                    f"**Markedsverdi** = {fmt_nok(new_mp, 2)} × {_nor(shares, 0)} aksjer "
+                    f"= **{fmt_nok(new_mkt)}**"
+                )
+                mk1, mk2 = st.columns(2)
+                mk1.metric("Kostpris (UB)", fmt_nok(kostpris))
+                urealisert = new_mkt - kostpris
+                mk2.metric("Urealisert gevinst/tap", fmt_nok(urealisert),
+                           delta=fmt_pct(urealisert / kostpris * 100) if kostpris else "–")
 
                 if st.button("Oppdater kurs", key=f"mpbtn_{i}"):
                     st.session_state.holdings[i]["manual_price"] = new_mp
